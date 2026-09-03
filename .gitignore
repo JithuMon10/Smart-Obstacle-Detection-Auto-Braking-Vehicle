@@ -1,0 +1,24 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.clangd/
+
+# Arduino
+build/
+*.hex
+*.bin
+*.elf
+*.o
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*~
+*.bak
+
+# OS generated
+Thumbs.db
+Desktop.ini
+.DS_Store
