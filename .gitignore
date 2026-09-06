@@ -1,0 +1,23 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# Build artifacts
+*.o
+*.obj
+*.bin
+*.elf
+*.hex
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
