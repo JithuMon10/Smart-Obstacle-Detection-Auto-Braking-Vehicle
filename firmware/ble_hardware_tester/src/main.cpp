@@ -1,32 +1,28 @@
 /*
  * ============================================================================
- *  SMART VEHICLE — MINIMAL RELIABLE BLE LED TESTER
+ *  MINIMAL UART & LED DIAGNOSTIC FIRMWARE FOR STM32 BLUE PILL
  * ============================================================================
- *  Board:      STM32F103C8T6 "Blue Pill"
- *  Framework:  Arduino (STM32duino)
+ *  Hardware Wiring:
+ *    BLE TXD  ──→  STM32 PA10 (USART1 RX)
+ *    BLE RXD  ──→  STM32 PA9  (USART1 TX)
+ *    PB5      ──→  220Ω ──→ GREEN1 LED ──→ GND
+ *    PB9      ──→  220Ω ──→ GREEN2 LED ──→ GND
+ *    PB6      ──→  220Ω ──→ BLUE LED   ──→ GND
+ *    PB7      ──→  220Ω ──→ RED_L LED  ──→ GND
+ *    PB8      ──→  220Ω ──→ RED_R LED  ──→ GND
  *
- *  HARDWARE WIRING:
- *  - BLE TXD ──→ STM32 PA10 (USART1 RX)
- *  - BLE RXD ──→ STM32 PA9  (USART1 TX)
- *  - PB5     ──→ 220Ω ──→ GREEN1 LED  ──→ GND
- *  - PB9     ──→ 220Ω ──→ GREEN2 LED  ──→ GND
- *  - PB6     ──→ 220Ω ──→ BLUE LED    ──→ GND
- *  - PB7     ──→ 220Ω ──→ RED_L LED   ──→ GND
- *  - PB8     ──→ 220Ω ──→ RED_R LED   ──→ GND
- *
- *  COMMAND PROTOCOL (Serial1, 9600 baud):
- *    '1' ── PB5 only                 (ACK:1)
- *    '2' ── PB9 only                 (ACK:2)
- *    '3' ── PB6 only                 (ACK:3)
- *    '4' ── PB7 only                 (ACK:4)
- *    '5' ── PB8 only                 (ACK:5)
- *    'A' ── All 5 LEDs ON            (ACK:A)
- *    'O' ── All 5 LEDs OFF           (ACK:O)
- *    'S' ── PB6 Blue ON, others OFF  (ACK:S)
- *    'F' ── PB5 + PB9 ON (Front)     (ACK:F)
- *    'B' ── PB7 + PB8 ON (Rear)      (ACK:B)
- *    'L' ── PB5 + PB7 ON (Left)      (ACK:L)
- *    'R' ── PB9 + PB8 ON (Right)     (ACK:R)
+ *  DIAGNOSTIC BEHAVIOR:
+ *  - On boot: PB6 blinks once (300ms ON, 200ms OFF), then stays ON.
+ *  - Sends "BOOT_OK\r\n" over Serial1 at 9600 baud.
+ *  - Every byte received on Serial1 immediately toggles its LED and sends an ACK:
+ *      '1' ──→ Toggles PB5 (Green 1)   ──→ replies "RX:1"
+ *      '2' ──→ Toggles PB9 (Green 2)   ──→ replies "RX:2"
+ *      '3' ──→ Toggles PB6 (Blue)      ──→ replies "RX:3"
+ *      '4' ──→ Toggles PB7 (Red Left)  ──→ replies "RX:4"
+ *      '5' ──→ Toggles PB8 (Red Right) ──→ replies "RX:5"
+ *      'A' ──→ Turns ALL LEDs ON       ──→ replies "RX:A"
+ *      'O' ──→ Turns ALL LEDs OFF      ──→ replies "RX:O"
+ *      Any other byte ──→ replies "RX:<byte>"
  * ============================================================================
  */
 
@@ -39,33 +35,23 @@
 #define PIN_RED_L  PB7
 #define PIN_RED_R  PB8
 
-// Helper to set all 5 LEDs
-void setLeds(bool g1, bool g2, bool b, bool rl, bool rr) {
-    digitalWrite(PIN_GREEN1, g1 ? HIGH : LOW);
-    digitalWrite(PIN_GREEN2, g2 ? HIGH : LOW);
-    digitalWrite(PIN_BLUE,   b  ? HIGH : LOW);
-    digitalWrite(PIN_RED_L,  rl ? HIGH : LOW);
-    digitalWrite(PIN_RED_R,  rr ? HIGH : LOW);
+// Current LED states
+bool state_g1 = false;
+bool state_g2 = false;
+bool state_blue = true; // Starts ON after boot blink
+bool state_rl = false;
+bool state_rr = false;
+
+void updateAllLeds() {
+    digitalWrite(PIN_GREEN1, state_g1   ? HIGH : LOW);
+    digitalWrite(PIN_GREEN2, state_g2   ? HIGH : LOW);
+    digitalWrite(PIN_BLUE,   state_blue ? HIGH : LOW);
+    digitalWrite(PIN_RED_L,  state_rl   ? HIGH : LOW);
+    digitalWrite(PIN_RED_R,  state_rr   ? HIGH : LOW);
 }
 
-// Power-on startup sweep to visually confirm all 5 LEDs and resistors work
-void startupSweep() {
-    const int pins[] = { PIN_GREEN1, PIN_GREEN2, PIN_BLUE, PIN_RED_L, PIN_RED_R };
-    for (int i = 0; i < 5; i++) {
-        digitalWrite(pins[i], HIGH);
-        delay(100);
-        digitalWrite(pins[i], LOW);
-    }
-    // Quick flash of all 5
-    setLeds(true, true, true, true, true);
-    delay(150);
-    setLeds(false, false, false, false, false);
-    delay(100);
-}
-
-// Process single-character command from BLE UART
-void processCommand(char c) {
-    // Ignore line endings and whitespace
+void processByte(char c) {
+    // Ignore CR, LF, Space
     if (c == '\r' || c == '\n' || c == ' ') {
         return;
     }
@@ -73,75 +59,64 @@ void processCommand(char c) {
     char cmd = toupper(c);
 
     switch (cmd) {
-        case '1': // PB5 only
-            setLeds(true, false, false, false, false);
-            Serial1.println("ACK:1");
+        case '1':
+            state_g1 = !state_g1;
+            digitalWrite(PIN_GREEN1, state_g1 ? HIGH : LOW);
+            Serial1.println("RX:1");
             break;
 
-        case '2': // PB9 only
-            setLeds(false, true, false, false, false);
-            Serial1.println("ACK:2");
+        case '2':
+            state_g2 = !state_g2;
+            digitalWrite(PIN_GREEN2, state_g2 ? HIGH : LOW);
+            Serial1.println("RX:2");
             break;
 
-        case '3': // PB6 only
-            setLeds(false, false, true, false, false);
-            Serial1.println("ACK:3");
+        case '3':
+            state_blue = !state_blue;
+            digitalWrite(PIN_BLUE, state_blue ? HIGH : LOW);
+            Serial1.println("RX:3");
             break;
 
-        case '4': // PB7 only
-            setLeds(false, false, false, true, false);
-            Serial1.println("ACK:4");
+        case '4':
+            state_rl = !state_rl;
+            digitalWrite(PIN_RED_L, state_rl ? HIGH : LOW);
+            Serial1.println("RX:4");
             break;
 
-        case '5': // PB8 only
-            setLeds(false, false, false, false, true);
-            Serial1.println("ACK:5");
+        case '5':
+            state_rr = !state_rr;
+            digitalWrite(PIN_RED_R, state_rr ? HIGH : LOW);
+            Serial1.println("RX:5");
             break;
 
-        case 'A': // All 5 LEDs ON
-            setLeds(true, true, true, true, true);
-            Serial1.println("ACK:A");
+        case 'A':
+            state_g1 = state_g2 = state_blue = state_rl = state_rr = true;
+            updateAllLeds();
+            Serial1.println("RX:A");
             break;
 
-        case 'O': // All 5 LEDs OFF
-            setLeds(false, false, false, false, false);
-            Serial1.println("ACK:O");
+        case 'O':
+            state_g1 = state_g2 = state_blue = state_rl = state_rr = false;
+            updateAllLeds();
+            Serial1.println("RX:O");
             break;
 
-        case 'S': // Stop / Standby: PB6 Blue ON
-            setLeds(false, false, true, false, false);
-            Serial1.println("ACK:S");
-            break;
-
-        case 'F': // Forward: PB5 + PB9 ON
-            setLeds(true, true, false, false, false);
-            Serial1.println("ACK:F");
-            break;
-
-        case 'B': // Backward: PB7 + PB8 ON
-            setLeds(false, false, false, true, true);
-            Serial1.println("ACK:B");
-            break;
-
-        case 'L': // Left: PB5 + PB7 ON
-            setLeds(true, false, false, true, false);
-            Serial1.println("ACK:L");
-            break;
-
-        case 'R': // Right: PB9 + PB8 ON
-            setLeds(false, true, false, false, true);
-            Serial1.println("ACK:R");
+        case 'S':
+            state_g1 = state_g2 = state_rl = state_rr = false;
+            state_blue = true;
+            updateAllLeds();
+            Serial1.println("RX:S");
             break;
 
         default:
-            Serial1.print("ERR:");
+            Serial1.print("RX:");
             Serial1.println(cmd);
             break;
     }
 }
 
 void setup() {
-    // 1. Configure all LED pins as outputs
+    // 1. Configure all 5 LED pins as push-pull outputs
     pinMode(PIN_GREEN1, OUTPUT);
     pinMode(PIN_GREEN2, OUTPUT);
     pinMode(PIN_BLUE,   OUTPUT);
@@ -149,25 +124,36 @@ void setup() {
     pinMode(PIN_RED_R,  OUTPUT);
 
     // Initial state: all OFF
-    setLeds(false, false, false, false, false);
+    state_g1 = state_g2 = state_blue = state_rl = state_rr = false;
+    updateAllLeds();
 
-    // 2. Visual self-test sweep
-    startupSweep();
+    // 2. Boot indication: Blink PB6 Blue once, then leave it ON
+    digitalWrite(PIN_BLUE, HIGH);
+    delay(300);
+    digitalWrite(PIN_BLUE, LOW);
+    delay(200);
+    state_blue = true;
+    digitalWrite(PIN_BLUE, HIGH);
 
-    // 3. Explicitly initialize hardware USART1 (PA10=RX, PA9=TX) at 9600 baud
+    // 3. Explicitly attach USART1 pins to PA10 (RX) and PA9 (TX)
+    // In the STM32duino Blue Pill variant, Serial1 pins default to NC (not connected)
+    // unless setRx() and setTx() are called before begin().
+#if defined(ARDUINO_ARCH_STM32)
+    Serial1.setRx(PA10);
+    Serial1.setTx(PA9);
+#endif
+
+    // 4. Start Hardware USART1 at 9600 baud
     Serial1.begin(9600);
 
-    // 4. Set initial state to Standby (PB6 Blue ON)
-    setLeds(false, false, true, false, false);
-
-    // 5. Send ready signal over BLE
-    Serial1.println("OK:READY");
+    // 5. Announce readiness over BLE
+    Serial1.println("BOOT_OK");
 }
 
 void loop() {
-    // Receive commands directly from hardware USART1 (BLE module)
-    while (Serial1.available()) {
+    // Read directly from hardware USART1 (PA10)
+    while (Serial1.available() > 0) {
         char c = (char)Serial1.read();
-        processCommand(c);
+        processByte(c);
     }
 }
