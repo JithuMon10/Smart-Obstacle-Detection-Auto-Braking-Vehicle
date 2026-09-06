@@ -143,31 +143,78 @@ void processCommand(char cmd) {
         case 'F':  // FORWARD: Headlights ON
             currentCommand = 'F';
             setLeds(true, true, false, false, false);
-            echoFeedback("F", "FORWARD [Front Greens ON]");
+            echoFeedback("F", "FORWARD [Front Greens ON: PB5, PB9]");
             break;
 
         case 'B':  // BACKWARD: Taillights ON
             currentCommand = 'B';
             setLeds(false, false, true, true, false);
-            echoFeedback("B", "BACKWARD [Rear Reds ON]");
+            echoFeedback("B", "BACKWARD [Rear Reds ON: PB7, PB8]");
             break;
 
         case 'L':  // LEFT: Left side indicators ON
             currentCommand = 'L';
             setLeds(true, false, true, false, false);
-            echoFeedback("L", "LEFT TURN [Left Green+Red ON]");
+            echoFeedback("L", "LEFT TURN [Left Green+Red ON: PB5, PB7]");
             break;
 
         case 'R':  // RIGHT: Right side indicators ON
             currentCommand = 'R';
             setLeds(false, true, false, true, false);
-            echoFeedback("R", "RIGHT TURN [Right Green+Red ON]");
+            echoFeedback("R", "RIGHT TURN [Right Green+Red ON: PB9, PB8]");
             break;
 
         case 'S':  // STOP: Standby Blue ON, all others OFF
             currentCommand = 'S';
             setLeds(false, false, false, false, true);
-            echoFeedback("S", "STOP / IDLE [Center Blue ON]");
+            echoFeedback("S", "STOP / IDLE [Center Blue ON: PB6]");
+            break;
+
+        case '1':  // INDIVIDUAL: Green 1 (PB5) only
+            currentCommand = '1';
+            setLeds(true, false, false, false, false);
+            echoFeedback("1", "TEST [Front Left GREEN1 only: PB5]");
+            break;
+
+        case '2':  // INDIVIDUAL: Green 2 (PB9) only
+            currentCommand = '2';
+            setLeds(false, true, false, false, false);
+            echoFeedback("2", "TEST [Front Right GREEN2 only: PB9]");
+            break;
+
+        case '3':  // INDIVIDUAL: Center Blue (PB6) only
+            currentCommand = '3';
+            setLeds(false, false, false, false, true);
+            echoFeedback("3", "TEST [Center BLUE only: PB6]");
+            break;
+
+        case '4':  // INDIVIDUAL: Red Left (PB7) only
+            currentCommand = '4';
+            setLeds(false, false, true, false, false);
+            echoFeedback("4", "TEST [Rear Left RED_L only: PB7]");
+            break;
+
+        case '5':  // INDIVIDUAL: Red Right (PB8) only
+            currentCommand = '5';
+            setLeds(false, false, false, true, false);
+            echoFeedback("5", "TEST [Rear Right RED_R only: PB8]");
+            break;
+
+        case 'A':  // ALL ON
+            currentCommand = 'A';
+            setLeds(true, true, true, true, true);
+            echoFeedback("A", "ALL LEDS ON [PB5, PB9, PB7, PB8, PB6]");
+            break;
+
+        case 'O':  // ALL OFF
+            currentCommand = 'O';
+            setLeds(false, false, false, false, false);
+            echoFeedback("O", "ALL LEDS OFF");
+            break;
+
+        case 'T':  // RUN SWEEP
+            startupLedSweep();
+            processCommand('S');
             break;
 
         default:
