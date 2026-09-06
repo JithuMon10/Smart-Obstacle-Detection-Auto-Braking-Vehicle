@@ -116,8 +116,8 @@ async def main():
                         t = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                         hex_val = f"0x{payload[0]:02X}"
 
-                        # Transmit directly to FFE2
-                        await client.write_gatt_char(UUID_WRITE, payload, response=False)
+                        # Transmit directly with response=True (Acknowledged ATT Write)
+                        await client.write_gatt_char(UUID_WRITE, payload, response=True)
                         print(f"\n  \033[94m──► [{t}] Sent raw byte: '{cmd_byte}' ({hex_val}) ── {desc}\033[0m")
                         print("  Press (1-5, A, O, S, Q): ", end="", flush=True)
 

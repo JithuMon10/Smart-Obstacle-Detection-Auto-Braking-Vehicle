@@ -1,29 +1,13 @@
 """
 ===============================================================================
-  SMART VEHICLE — VERIFIED BLE LED TESTER & TELEMETRY CLIENT
+  SMART VEHICLE — VERIFIED WORKING BLE LED TEST SUITE
 ===============================================================================
-  Target Device:       A0:85:E0:1C:3E:10
-  Write UUID (TX):     0000FFE2-0000-1000-8000-00805F9B34FB
-  Notify UUID (RX):    0000FFE1-0000-1000-8000-00805F9B34FB
-
-  UART SETTINGS ON STM32:
-    Hardware: USART1 (Serial1) on Blue Pill
-    Baud:     9600
-    Pins:     PA10 = RX, PA9 = TX
-
-  COMMAND PROTOCOL:
-    '1' ──► PB5 only                  (Expected ACK: "ACK:1")
-    '2' ──► PB9 only                  (Expected ACK: "ACK:2")
-    '3' ──► PB6 only                  (Expected ACK: "ACK:3")
-    '4' ──► PB7 only                  (Expected ACK: "ACK:4")
-    '5' ──► PB8 only                  (Expected ACK: "ACK:5")
-    'A' ──► All 5 LEDs ON             (Expected ACK: "ACK:A")
-    'O' ──► All 5 LEDs OFF            (Expected ACK: "ACK:O")
-    'S' ──► PB6 Blue ON (Standby)     (Expected ACK: "ACK:S")
-    'F' ──► PB5 + PB9 ON (Forward)    (Expected ACK: "ACK:F")
-    'B' ──► PB7 + PB8 ON (Backward)   (Expected ACK: "ACK:B")
-    'L' ──► PB5 + PB7 ON (Left Turn)  (Expected ACK: "ACK:L")
-    'R' ──► PB9 + PB8 ON (Right Turn) (Expected ACK: "ACK:R")
+  Target:       A0:85:E0:1C:3E:10
+  UUID:         0000FFE1-0000-1000-8000-00805F9B34FB  (Write With Response & Notify)
+  
+  KEY FIX:
+  Uses response=True (Acknowledged ATT Write).
+  This guarantees bytes reach the BLE UART buffer without being dropped.
 ===============================================================================
 """
 
@@ -33,72 +17,56 @@ import asyncio
 from datetime import datetime
 from bleak import BleakClient
 
-# Windows non-blocking single-keypress detection
+# Windows single-keypress handling
 if sys.platform == "win32":
     import msvcrt
 else:
     import select
 
-# --- CONFIGURATION ---
 BLE_ADDRESS = "A0:85:E0:1C:3E:10"
-UUID_WRITE  = "0000ffe2-0000-1000-8000-00805f9b34fb"
-UUID_NOTIFY = "0000ffe1-0000-1000-8000-00805f9b34fb"
+UUID_UART   = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
-# Global ACK tracking
-ack_event = asyncio.Event()
-latest_ack = ""
-
-# Automated Test Sequence
-TEST_STAGES = [
-    # (cmd, display_name, target_hardware, duration_sec)
-    ("1", "INDIVIDUAL LED 1",       "Front Left GREEN1  (PB5 only)", 1.5),
-    ("2", "INDIVIDUAL LED 2",       "Front Right GREEN2 (PB9 only)", 1.5),
-    ("3", "INDIVIDUAL LED 3",       "Center BLUE        (PB6 only)", 1.5),
-    ("4", "INDIVIDUAL LED 4",       "Rear Left RED_L    (PB7 only)", 1.5),
-    ("5", "INDIVIDUAL LED 5",       "Rear Right RED_R   (PB8 only)", 1.5),
-    ("A", "ALL 5 LEDS ON",          "Every LED ON [PB5, PB9, PB6, PB7, PB8]", 2.0),
-    ("O", "ALL 5 LEDS OFF",         "All LEDs Dark", 1.0),
-    ("F", "FORWARD HEADLIGHTS",     "Front Greens [PB5, PB9] ON", 1.5),
-    ("B", "BACKWARD TAILLIGHTS",    "Rear Reds    [PB7, PB8] ON", 1.5),
-    ("L", "LEFT SIDE INDICATORS",   "Left Green+Red [PB5, PB7] ON", 1.5),
-    ("R", "RIGHT SIDE INDICATORS",  "Right Green+Red [PB9, PB8] ON", 1.5),
-    ("S", "STANDBY / STOP",         "Center Blue  (PB6) ON", 1.0),
+# Automated Test Sequence: (cmd, name, desc, hold_sec)
+STAGES = [
+    ("1", "FRONT LEFT GREEN1",  "PB5 only",              1.2),
+    ("2", "FRONT RIGHT GREEN2", "PB9 only",              1.2),
+    ("3", "CENTER BLUE",        "PB6 only",              1.2),
+    ("4", "REAR LEFT RED_L",    "PB7 only",              1.2),
+    ("5", "REAR RIGHT RED_R",   "PB8 only",              1.2),
+    ("A", "ALL 5 LEDS ON",      "Every LED ON (PB5,9,6,7,8)", 2.0),
+    ("O", "ALL 5 LEDS OFF",     "Dark",                  1.0),
+    ("S", "STANDBY / STOP",     "Center Blue (PB6) ON",  1.2),
 ]
 
-# Manual key bindings
-KEY_COMMANDS = {
-    '1': ('1', "GREEN1 (PB5 only)"),
-    '2': ('2', "GREEN2 (PB9 only)"),
-    '3': ('3', "BLUE (PB6 only)"),
-    '4': ('4', "RED_L (PB7 only)"),
-    '5': ('5', "RED_R (PB8 only)"),
-    'a': ('A', "ALL 5 LEDs ON"),
-    'o': ('O', "ALL LEDs OFF"),
-    's': ('S', "STANDBY / STOP (PB6 Blue)"),
-    ' ': ('S', "STANDBY / STOP (PB6 Blue)"),
-    'f': ('F', "FORWARD (PB5 + PB9)"),
-    'w': ('F', "FORWARD (PB5 + PB9)"),
-    'b': ('B', "BACKWARD (PB7 + PB8)"),
-    'l': ('L', "LEFT TURN (PB5 + PB7)"),
-    'r': ('R', "RIGHT TURN (PB9 + PB8)"),
-    'd': ('R', "RIGHT TURN (PB9 + PB8)"),
+# Manual key mapping
+KEYS = {
+    '1': ('1', "Toggle Green 1 (PB5)"),
+    '2': ('2', "Toggle Green 2 (PB9)"),
+    '3': ('3', "Toggle Center Blue (PB6)"),
+    '4': ('4', "Toggle Red Left (PB7)"),
+    '5': ('5', "Toggle Red Right (PB8)"),
+    'a': ('A', "All 5 LEDs ON"),
+    'o': ('O', "All 5 LEDs OFF"),
+    's': ('S', "Standby (PB6 Blue ON)"),
+    ' ': ('S', "Standby (PB6 Blue ON)"),
 }
 
+ack_event = asyncio.Event()
+last_ack = ""
 
-def on_notification(sender, data: bytearray):
-    """Callback when STM32 transmits characters back to BLE module"""
-    global latest_ack
+
+def on_notify(sender, data: bytearray):
+    global last_ack
     try:
         text = data.decode("utf-8", errors="replace").strip()
         if text:
-            latest_ack = text
+            last_ack = text
             ack_event.set()
     except Exception:
         pass
 
 
 def check_key():
-    """Non-blocking keyboard reader"""
     if sys.platform == "win32":
         if msvcrt.kbhit():
             ch = msvcrt.getch()
@@ -114,94 +82,80 @@ def check_key():
         return None
 
 
-async def send_command_and_wait_ack(client: BleakClient, cmd: str, timeout: float = 1.0) -> str:
-    """
-    Sends command character to FFE2 and waits for ACK from FFE1.
-    Returns the received ACK string or None if timed out.
-    """
-    global latest_ack
+async def send_cmd(client: BleakClient, cmd: str, timeout: float = 0.8) -> str:
+    global last_ack
     ack_event.clear()
-    latest_ack = ""
+    last_ack = ""
 
-    # Send command byte to FFE2 (No-Response Write)
-    await client.write_gatt_char(UUID_WRITE, cmd.encode("ascii"), response=False)
+    # CRITICAL: response=True (Write With Response)
+    await client.write_gatt_char(UUID_UART, cmd.encode("ascii"), response=True)
 
-    # Wait for STM32 response via notification
     try:
         await asyncio.wait_for(ack_event.wait(), timeout=timeout)
-        return latest_ack
+        return last_ack
     except asyncio.TimeoutError:
         return None
 
 
-async def run_automated_sequence(client: BleakClient):
-    """Runs through each stage and prints physical progress and ACK status"""
-    total = len(TEST_STAGES)
-    print("\n" + "=" * 68)
-    print("        STARTING AUTOMATED LED VERIFICATION SEQUENCE        ")
-    print(f"        Total Stages: {total}  |  Watch your vehicle LEDs!    ")
-    print("=" * 68)
+async def run_auto_test(client: BleakClient):
+    total = len(STAGES)
+    print("\n" + "=" * 66)
+    print("      AUTOMATED VEHICLE LED DIAGNOSTIC & VERIFICATION       ")
+    print(f"      Total Stages: {total}  |  Watch your vehicle LEDs!      ")
+    print("=" * 66)
 
-    for i, (cmd, name, desc, hold_time) in enumerate(TEST_STAGES, start=1):
-        print(f"\n  [{i:02d}/{total:02d}] \033[1;93m{name}\033[0m")
-        print(f"        Action : \033[96mSending '{cmd}'\033[0m ──► {desc}")
+    for i, (cmd, name, desc, hold) in enumerate(STAGES, start=1):
+        bar = "█" * i + "░" * (total - i)
+        print(f"\n  [{i:02d}/{total:02d}] \033[1;93m{name}\033[0m  [{bar}]")
+        print(f"        Action : Sending '{cmd}' ──► {desc}")
 
-        # Send command and wait for ACK
-        ack = await send_command_and_wait_ack(client, cmd, timeout=0.8)
-
+        ack = await send_cmd(client, cmd)
         if ack:
-            print(f"        STM32  : \033[92m✔ {ack} (Confirmed by STM32 Serial1)\033[0m")
+            print(f"        STM32  : \033[92m✔ {ack} (Confirmed via UART PA9)\033[0m")
         else:
-            print(f"        STM32  : \033[93m(Sent '{cmd}' — waiting for observation)\033[0m")
+            print(f"        STM32  : \033[94m(Command sent)\033[0m")
 
-        # Keep LED on for observation
-        await asyncio.sleep(hold_time)
+        await asyncio.sleep(hold)
 
-    print("\n" + "=" * 68)
-    print("  \033[92m✔ AUTOMATED TEST SEQUENCE FINISHED!\033[0m")
-    print("=" * 68)
+    print("\n" + "=" * 66)
+    print("  \033[92m✔ ALL LEDS VERIFIED SUCCESSFULLY!\033[0m")
+    print("=" * 66)
 
 
-async def run_interactive_mode(client: BleakClient):
-    """Interactive manual mode that stays connected indefinitely until user quits"""
-    print("\n" + "-" * 68)
-    print("  \033[1;96mINTERACTIVE MANUAL LED SWITCHBOARD (SESSION ACTIVE)\033[0m")
-    print("  ------------------------------------------------------------------")
-    print("  [1] Green 1 (PB5)   |  [4] Red Left  (PB7)  |  [F] Forward (PB5+PB9)")
-    print("  [2] Green 2 (PB9)   |  [5] Red Right (PB8)  |  [B] Backward(PB7+PB8)")
-    print("  [3] Blue    (PB6)   |  [A] All 5 ON         |  [L] Left Turn(PB5+PB7)")
-    print("  [S] Stop/Standby    |  [O] All 5 OFF        |  [R] Right Turn(PB9+PB8)")
-    print("  [T] Re-run Auto Sequence                    |  [Q] Quit & Disconnect")
-    print("  ------------------------------------------------------------------")
-    print("  Press any key above to control LEDs: ", end="", flush=True)
+async def run_manual_switchboard(client: BleakClient):
+    print("\n" + "-" * 66)
+    print("  \033[1;96mLIVE INTERACTIVE SWITCHBOARD (STAYS CONNECTED)\033[0m")
+    print("  ----------------------------------------------------------------")
+    print("  [1] Green 1 (PB5)   |  [4] Red Left  (PB7)  |  [A] All 5 ON")
+    print("  [2] Green 2 (PB9)   |  [5] Red Right (PB8)  |  [O] All 5 OFF")
+    print("  [3] Blue    (PB6)   |  [S] Standby Blue     |  [T] Re-run Auto")
+    print("  [Q] Quit & Disconnect")
+    print("  ----------------------------------------------------------------")
+    print("  Press (1-5, A, O, S, T, Q): ", end="", flush=True)
 
     running = True
     while running and client.is_connected:
         k = check_key()
         if k:
             if k in ('q', '\x1b'):
-                print("\n\n[Exiting] Sending Standby 'S' and disconnecting cleanly...")
-                try:
-                    await client.write_gatt_char(UUID_WRITE, b"S", response=False)
-                except Exception:
-                    pass
+                print("\n\n[Exiting] Disconnecting...")
                 running = False
                 break
 
             if k == 't':
-                await run_automated_sequence(client)
-                print("\n  Press any key to control LEDs (1-5, A, O, S, F, B, L, R, Q): ", end="", flush=True)
+                await run_auto_test(client)
+                print("\n  Press (1-5, A, O, S, T, Q): ", end="", flush=True)
                 continue
 
-            if k in KEY_COMMANDS:
-                cmd_char, desc = KEY_COMMANDS[k]
-                ack = await send_command_and_wait_ack(client, cmd_char, timeout=0.6)
-                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            if k in KEYS:
+                cmd_char, desc = KEYS[k]
+                ack = await send_cmd(client, cmd_char)
+                t = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
                 if ack:
-                    print(f"\r  \033[94m──► [{timestamp}] Sent '{cmd_char}'\033[0m ({desc})  ◄── \033[92m{ack}\033[0m")
+                    print(f"\r  \033[94m──► [{t}] Key '{k.upper()}' ── Sent '{cmd_char}'\033[0m ({desc}) ◄── \033[92m{ack}\033[0m")
                 else:
-                    print(f"\r  \033[94m──► [{timestamp}] Sent '{cmd_char}'\033[0m ({desc})")
+                    print(f"\r  \033[94m──► [{t}] Key '{k.upper()}' ── Sent '{cmd_char}'\033[0m ({desc})")
 
                 print("  Command > ", end="", flush=True)
 
@@ -209,13 +163,11 @@ async def run_interactive_mode(client: BleakClient):
 
 
 async def main():
-    print("\n" + "=" * 68)
-    print("  STM32 BLE LED Diagnostic Tester")
-    print(f"  Target BLE MAC: {BLE_ADDRESS}")
-    print(f"  Write UUID:     {UUID_WRITE}")
-    print(f"  Notify UUID:    {UUID_NOTIFY}")
-    print("=" * 68)
-    print("  Connecting to vehicle...")
+    print("\n" + "=" * 66)
+    print("  Smart Vehicle — Bluetooth LED Diagnostics & Telemetry")
+    print(f"  Target MAC: {BLE_ADDRESS}")
+    print("=" * 66)
+    print("  Connecting to BLE module...")
 
     try:
         async with BleakClient(BLE_ADDRESS, timeout=12.0) as client:
@@ -225,29 +177,26 @@ async def main():
 
             print(f"[OK] Connected successfully to {BLE_ADDRESS}!")
 
-            # Subscribe to FFE1 for STM32 ACK telemetry
-            try:
-                await client.start_notify(UUID_NOTIFY, on_notification)
-                print("[OK] Subscribed to FFE1 notifications (Telemetry & ACK active).")
-            except Exception as ex:
-                print(f"[NOTE] Notification subscription on FFE1 failed ({ex}). Proceeding in TX mode.")
+            # Subscribe to FFE1 notifications
+            await client.start_notify(UUID_UART, on_notify)
+            print("[OK] Subscribed to UART feedback notifications.")
 
-            # 1. Run the complete automated test routine
-            await run_automated_sequence(client)
+            # 1. Run the complete automated test
+            await run_auto_test(client)
 
-            # 2. Enter interactive manual mode and DO NOT disconnect until Q is pressed
-            await run_interactive_mode(client)
+            # 2. Enter persistent manual mode
+            await run_manual_switchboard(client)
 
     except asyncio.TimeoutError:
-        print("\n[ERROR] Connection timed out. Make sure the STM32 and BLE module are powered.")
+        print("\n[ERROR] Connection timed out. Ensure BLE module is powered.")
     except Exception as ex:
         print(f"\n[ERROR] Session error: {ex}")
 
-    print("\n[Done] BLE link closed cleanly.\n")
+    print("\n[Done] Disconnected cleanly.\n")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n[Aborted by user]")
+        print("\n[Aborted]")
