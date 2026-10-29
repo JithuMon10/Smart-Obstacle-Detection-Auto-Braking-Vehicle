@@ -125,7 +125,7 @@ async def run_telemetry_loop(client: BleakClient):
 
     # Initial STOP command to synchronize STM32
     try:
-        await client.write_gatt_char(UUID_WRITE, b"S", response=False)
+        await client.write_gatt_char(UUID_WRITE, b"S", response=True)
     except Exception as e:
         print(f"\n[Warning] Initial write failed: {e}")
 
@@ -136,7 +136,7 @@ async def run_telemetry_loop(client: BleakClient):
             if key in ('q', '\x1b'):  # Q or Escape to quit
                 print("\n\n[Exiting] Sending STOP and disconnecting...")
                 try:
-                    await client.write_gatt_char(UUID_WRITE, b"S", response=False)
+                    await client.write_gatt_char(UUID_WRITE, b"S", response=True)
                 except Exception:
                     pass
                 running = False
@@ -149,11 +149,11 @@ async def run_telemetry_loop(client: BleakClient):
                 current_detail = detail
 
                 try:
-                    # Send single command byte to FFE2
+                    # Send single command byte to FFE2 with response=True (Acknowledged ATT Write)
                     await client.write_gatt_char(
                         UUID_WRITE,
                         cmd_char.encode("ascii"),
-                        response=False
+                        response=True
                     )
                     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     print(f"\r  \033[94m──► [{timestamp}] Sent '{cmd_char}' ({desc})\033[0m -> {detail}")
@@ -171,7 +171,11 @@ async def main():
     print("=" * 62)
 
     try:
-        async with BleakClient(BLE_ADDRESS, timeout=12.0) as client:
+        print("  Scanning for vehicle to warm up Windows BLE...")
+        device = await BleakScanner.find_device_by_address(BLE_ADDRESS, timeout=6.0)
+        client_target = device if device is not None else BLE_ADDRESS
+
+        async with BleakClient(client_target, timeout=12.0) as client:
             if not client.is_connected:
                 print(f"[ERROR] Failed to establish BLE link with {BLE_ADDRESS}.")
                 return

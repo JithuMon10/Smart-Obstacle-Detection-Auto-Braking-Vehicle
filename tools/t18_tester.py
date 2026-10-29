@@ -189,8 +189,10 @@ class BLEWorker:
         self._post("STATUS", "connecting")
         self._post("LOG_INFO", f"Connecting to {BLE_ADDRESS}...")
         try:
+            device = await BleakScanner.find_device_by_address(BLE_ADDRESS, timeout=6.0)
+            target = device if device is not None else BLE_ADDRESS
             self.client = BleakClient(
-                BLE_ADDRESS,
+                target,
                 disconnected_callback=self._on_disconnected,
                 timeout=12.0
             )
@@ -226,7 +228,7 @@ class BLEWorker:
     async def _disconnect(self):
         if self.client and self.client.is_connected:
             try:
-                await self.client.write_gatt_char(UUID_WRITE, b"S", response=True)
+                await self.client.write_gatt_char(UUID_WRITE, b"S\n", response=True)
             except Exception:
                 pass
             try:
@@ -245,11 +247,12 @@ class BLEWorker:
             return
         try:
             self._last_traffic_time = time.time()
-            await self.client.write_gatt_char(
-                UUID_WRITE,
-                cmd.encode("ascii"),
-                response=True
-            )
+            payload = (cmd + "\n").encode("ascii")
+            try:
+                await self.client.write_gatt_char(UUID_WRITE, payload, response=True)
+            except Exception:
+                await self.client.write_gatt_char(UUID_WRITE, payload, response=False)
+
             if not is_heartbeat:
                 self._post("TX", cmd)
             else:
@@ -707,28 +710,28 @@ class T18App(ctk.CTk):
         # Row 1: Forward
         r1 = ctk.CTkFrame(dpad, fg_color="transparent")
         r1.pack()
-        ctk.CTkButton(r1, text="▲", command=lambda: self._send("W"), **btn_style).pack()
+        ctk.CTkButton(r1, text="▲", command=lambda: self._send("F"), **btn_style).pack()
 
         # Row 2: Left, Stop, Right
         r2 = ctk.CTkFrame(dpad, fg_color="transparent")
         r2.pack(pady=3)
-        ctk.CTkButton(r2, text="◄", command=lambda: self._send("<"), **btn_style).pack(side="left", padx=3)
+        ctk.CTkButton(r2, text="◄", command=lambda: self._send("L"), **btn_style).pack(side="left", padx=3)
 
         stop_btn = ctk.CTkButton(
             r2, text="■", width=52, height=36, corner_radius=8,
             font=("Segoe UI", 13, "bold"),
             fg_color=C["red_dim"], hover_color=C["red"],
             text_color=C["red"], border_width=1, border_color=C["red"],
-            command=lambda: self._send("!")
+            command=lambda: self._send("S")
         )
         stop_btn.pack(side="left", padx=3)
 
-        ctk.CTkButton(r2, text="►", command=lambda: self._send(">"), **btn_style).pack(side="left", padx=3)
+        ctk.CTkButton(r2, text="►", command=lambda: self._send("R"), **btn_style).pack(side="left", padx=3)
 
         # Row 3: Reverse
         r3 = ctk.CTkFrame(dpad, fg_color="transparent")
         r3.pack()
-        ctk.CTkButton(r3, text="▼", command=lambda: self._send("X"), **btn_style).pack()
+        ctk.CTkButton(r3, text="▼", command=lambda: self._send("B"), **btn_style).pack()
 
         # Speed slider
         spd_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -866,9 +869,7 @@ class T18App(ctk.CTk):
     def _on_speed_change(self, value):
         pct = int(value)
         self.speed_label.configure(text=f"Speed: {pct}%")
-        # Map 0-100 to P0-P9
-        digit = min(9, int(pct / 100 * 9 + 0.5))
-        self._send(f"P{digit}")
+        self._send(f"V:{pct}")
 
     def _toggle_continuous(self):
         self.continuous_dist = not self.continuous_dist
@@ -911,18 +912,18 @@ class T18App(ctk.CTk):
         char = event.char
 
         key_map = {
-            'w': 'W', 'up': 'W',
-            's': 'X', 'down': 'X',
-            'a': '<', 'left': '<',
-            'd': '>', 'right': '>',
+            'w': 'F', 'up': 'F',
+            's': 'B', 'down': 'B',
+            'a': 'L', 'left': 'L',
+            'd': 'R', 'right': 'R',
         }
 
         if k in key_map:
             self._send(key_map[k])
             return
 
-        if k == 'space':
-            self._send("!")
+        if k in ('space', 'x'):
+            self._send("S")
             return
 
         # Number keys for LEDs
